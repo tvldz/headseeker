@@ -11,6 +11,10 @@ import (
   "time"
 )
 
+const MAX_CONCURRENCY = 15
+const THRESHOLD = 5
+const TIMEOUT = 5
+
 func readLines(path string) ([]string, error) {
   file, err := os.Open(path)
   if err != nil {
@@ -28,7 +32,7 @@ func readLines(path string) ([]string, error) {
 
 func getResponseHash(domain string, ip string) uint64{
 	client := &http.Client{
-		Timeout: time.Duration(3 * time.Second),
+		Timeout: time.Duration(TIMEOUT * time.Second),
 	}
 
 	req, err := http.NewRequest("GET", "http://" + ip, nil)
@@ -50,34 +54,21 @@ func getResponseHash(domain string, ip string) uint64{
 	return simhash.Simhash(simhash.NewWordFeatureSet(body))
 }
 
-/**
-func populateInitialHashes(domains []string, ips []string, knownHashes []uint64) []uint64 {
-	var responseHash uint64
-	fmt.Println(append(domains,ips...))
-	for _, host := range append(domains,ips...) {
-		responseHash = getResponseHash("", host)
-		fmt.Println(responseHash)
-		knownHashes = AppendIfMissing(knownHashes, responseHash)
-	}
-	return knownHashes
-} **/
-
-// http://jmoiron.net/blog/limiting-concurrency-in-go/
 func populateInitialHashes(domains []string, ips []string) []uint64 {
-	//var responseHash uint64
+
 	var knownHashes []uint64
 	hosts := append(domains, ips...)
 
-	concurrency := 10
-	sem := make(chan bool, concurrency)
+	sem := make(chan bool, MAX_CONCURRENCY)
 
+	// http://jmoiron.net/blog/limiting-concurrency-in-go/
 	for _, host := range hosts {
     	sem <- true
     	go func(host string) {
         	defer func() { <-sem }()
         	// get the url
         	client := &http.Client{
-				Timeout: time.Duration(3 * time.Second),
+				Timeout: time.Duration(TIMEOUT * time.Second),
 			}
 			req, err := http.NewRequest("GET", "http://" + host, nil)
 			if err != nil {
@@ -114,7 +105,7 @@ func AppendIfMissing(slice []uint64, i uint64) []uint64 {
 
 func isHashUnique(responseHash uint64, knownHashes []uint64) bool{
 	for _, hash := range knownHashes {
-		if simhash.Compare(hash, responseHash) < 10 {
+		if simhash.Compare(hash, responseHash) < THRESHOLD {
 			return false
 		}
 	}
@@ -122,7 +113,6 @@ func isHashUnique(responseHash uint64, knownHashes []uint64) bool{
 }
 
 func main() {
-	//var threshold = 5
 	var knownHashes []uint64
 	var responseHash uint64
 
@@ -136,20 +126,26 @@ func main() {
 		log.Fatalf("readLines: %s", err)
 	}
 
-	//fmt.Println(ips)
-	//fmt.Println(domains)
-
 	knownHashes = populateInitialHashes(ips, domains)
 	fmt.Println(knownHashes)
 
+	sem := make(chan bool, MAX_CONCURRENCY)
 	for _, ip := range ips {
 		for _, domain := range domains {
-			responseHash = getResponseHash(domain, ip)
-			if responseHash != 0 {
-				if isHashUnique(responseHash, knownHashes) == true {
-					fmt.Printf("%s:%s:%x\n", domain, ip, responseHash)
-				}
-			}
+			sem <- true
+    		go func(ip string, domain string) {
+        		defer func() { <-sem }()
+        // get the url
+        		responseHash = getResponseHash(domain, ip)
+				if responseHash != 0 {
+					if isHashUnique(responseHash, knownHashes) == true {
+						fmt.Printf("%s:%s:%x\n", domain, ip, responseHash)
+					}
+   		 		}
+			}(ip, domain)
 		}
+	}
+	for i := 0; i < cap(sem); i++ {
+    	sem <- true
 	}
 }
