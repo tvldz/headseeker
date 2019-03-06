@@ -14,6 +14,16 @@ import (
 const MAX_CONCURRENCY = 15
 const THRESHOLD = 5
 const TIMEOUT = 5
+const FORMAT = "%-35s:%-20x:%d\n"
+
+/**
+type Hit struct {
+	IP string
+	Domain string
+	Response int 
+	Simhash int64
+} **/
+
 
 func readLines(path string) ([]string, error) {
   file, err := os.Open(path)
@@ -69,6 +79,9 @@ func populateInitialHashes(domains []string, ips []string) []uint64 {
         	// get the url
         	client := &http.Client{
 				Timeout: time.Duration(TIMEOUT * time.Second),
+				CheckRedirect: func(req *http.Request, via []*http.Request) error {
+      				return http.ErrUseLastResponse
+  				},
 			}
 			req, err := http.NewRequest("GET", "http://" + host, nil)
 			if err != nil {
@@ -83,7 +96,9 @@ func populateInitialHashes(domains []string, ips []string) []uint64 {
 			if err != nil {
 				return
 			}
-			fmt.Println(host)
+			fmt.Printf(FORMAT,host,simhash.Simhash(simhash.NewWordFeatureSet(body)),resp.StatusCode)
+			fmt.Println(string(body[0:50]))
+			fmt.Println("\n")
 			knownHashes = AppendIfMissing(knownHashes, simhash.Simhash(simhash.NewWordFeatureSet(body)))
     	}(host)
 	}
